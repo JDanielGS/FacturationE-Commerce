@@ -1,0 +1,433 @@
+Proyecto 1: Facturación y conciliación de pagos
+    Lenguaje: TypeScript (Node.js) + PostgreSQL
+    MVP: 110-131 h | Total con portafolio: 140-169 h
+    Calendario: 7-8 meses a 5 h/semana
+    Enfoque: dinero, transacciones, idempotencia, multi-tenant.
+===============================================================================
+4. PROYECTO 1: FACTURACIÓN Y CONCILIACIÓN (TYPESCRIPT)
+===============================================================================
+
+4.1 Pitch, usuarios y problema
+
+Pitch:
+  Una herramienta para freelancers y estudios pequeños que permite emitir
+  facturas, cobrar en parciales, conciliar pagos de una pasarela y saber
+  quién debe cuánto, sin usar una hoja de cálculo.
+
+Problema real:
+  - Facturas en Word/Excel, numeración manual y errores de cálculo.
+  - Pagos parciales que no cuadran con la factura.
+  - Falta de trazabilidad: ¿quién cambió el monto y cuándo?
+  - Cobros vencidos que nadie reclama.
+  - Conciliación manual entre lo que dice el banco/pasarela y lo facturado.
+
+Usuarios:
+  - Dueño del estudio: crea clientes, emite facturas y ve reportes.
+  - Contador/colaborador: registra pagos y revisa vencidos.
+  - Cliente final: recibe un enlace, ve la factura y paga.
+  - Administrador del sistema (tú): soporte y auditoría.
+
+Por qué no es un CRUD:
+  - El dinero exige exactitud y transacciones.
+  - Los webhooks exigen idempotencia y reintentos.
+  - La factura emitida es un documento inmutable.
+  - Varios usuarios y workspaces exigen aislamiento de datos.
+  - La conciliación exige modelar asignaciones parciales.
+
+4.2 Alcance del MVP y no-alcance
+
+MVP (entra):
+  - Multi-tenant por workspace.
+  - Registro/login, sesión y roles (owner, accountant, viewer).
+  - Clientes y catálogo de servicios con impuestos.
+  - Facturas con líneas, numeración, estados y moneda.
+  - Pagos parciales y asignación a una o varias facturas.
+  - Link de pago con Stripe en modo test.
+  - Webhook idempotente y reconciliación básica.
+  - Recordatorios y marcado automático de vencidas.
+  - Auditoría inmutable de acciones.
+  - Reportes: aging, ingresos por mes, impuestos.
+  - UI mínima en Next.js para los flujos anteriores.
+
+No-alcance (queda en backlog):
+  - Facturación recurrente y suscripciones.
+  - Múltiples pasarelas de pago.
+  - App móvil.
+  - Contabilidad completa, nómina o inventario.
+  - Integración con autoridades fiscales.
+  - Multi-moneda avanzada con tipos de cambio históricos.
+  - Portal del cliente con login completo (solo link firmado).
+  - Firma electrónica y PDF con validez legal.
+  - IA en el MVP.
+
+4.3 Stack y justificación
+
+  Capa            | Elección                  | Por qué
+------------------+---------------------------+--------------------------------
+  Runtime         | Node 22 + TypeScript      | Un solo lenguaje en API y UI;
+                  |                           | tipado y ecosistema.
+  API             | Fastify                   | Explícito, rápido, pocas magias;
+                  |                           | bueno para aprender HTTP.
+  Base de datos   | PostgreSQL 16             | Transacciones, constraints,
+                  |                           | índices, RLS, JSONB.
+  Acceso a datos  | Drizzle ORM               | SQL visible; no esconde las
+                  |                           | consultas como un ORM pesado.
+  Validación      | Zod                       | Esquemas reutilizables en API
+                  |                           | y formularios.
+  Jobs            | Redis 7 + BullMQ          | Colas, reintentos, workers.
+  Pagos           | Stripe test + FakeGateway | Aprender puertos/adaptadores
+                  |                           | sin mover dinero real.
+  Frontend        | Next.js App Router        | Server components, rutas,
+                  | + Tailwind + shadcn/ui    | UI rápida y accesible.
+  Tests           | Vitest + Testcontainers   | Unitarios e integración con
+                  | + Playwright              | PostgreSQL real y e2e.
+  Infra local     | Docker Compose            | Postgres, Redis, Mailpit.
+  CI              | GitHub Actions            | Lint, tipos, tests y build.
+
+Decisión de ORM: Drizzle deja ver SQL y migraciones; Prisma es más cómodo
+pero esconde más. Para aprender, Drizzle. Si eliges Prisma, documenta el
+trade-off en un ADR.
+
+4.4 Arquitectura objetivo
+
+Diagrama:
+
+  [Next.js]
+      |
+      v
+  [Fastify API] ---> [PostgreSQL]
+      |                   ^
+      |                   |
+      +--> [Outbox] ------+
+      |
+      +--> [BullMQ worker] ---> [Redis]
+      |                         |
+      |                         +--> [Email / recordatorios]
+      |
+      +--> [PaymentGateway]
+             |--> StripeAdapter
+             |--> FakeGateway
+
+Capas y carpetas:
+
+  src/
+    domain/           Entidades, value objects, estados, invariantes.
+    application/      Casos de uso, puertos, DTOs internos.
+    infrastructure/   Drizzle, Stripe, BullMQ, email, configuración.
+    interfaces/       Rutas HTTP, esquemas Zod, mapeo de errores.
+    workers/          Consumidores de colas y outbox.
+    shared/           Utilidades puras (dinero, fechas, ids).
+
+Reglas:
+  - domain no importa Fastify, Drizzle ni Stripe.
+  - application orquesta; no conoce HTTP.
+  - infrastructure implementa puertos.
+  - interfaces traduce HTTP a casos de uso.
+  - Los workers reutilizan application, no duplican lógica.
+
+Puertos:
+  - PaymentGateway (createCheckout, verifyWebhook, refund).
+  - EventPublisher (publish).
+  - Clock (para tests deterministas).
+  - IdGenerator.
+  - Mailer.
+
+Flujo de un pago:
+  1. El cliente paga en Stripe test.
+  2. Stripe llama al webhook.
+  3. La API verifica firma y guarda el evento en webhook_events con
+     external_event_id único.
+  4. En la misma transacción, registra el pago y una fila en outbox_events.
+  5. Un worker publica el evento y envía el correo.
+  6. Si el webhook se repite, la restricción única evita duplicados.
+
+Multi-tenant:
+  - Toda tabla de negocio tiene workspace_id.
+  - El repositorio recibe el workspace del contexto autenticado, nunca del
+    body.
+  - Tests de integración que intentan leer datos de otro workspace.
+  - Opción avanzada: Row Level Security en PostgreSQL; documenta si la usas.
+
+Errores:
+  - Errores de dominio con código estable.
+  - Mapeo a HTTP: 400 validación, 401 no autenticado, 403 sin permiso,
+    404 no encontrado, 409 conflicto, 422 regla de negocio, 500 inesperado.
+  - Nunca devolver stack traces al cliente.
+
+4.5 Modelo de datos
+
+Entidades principales:
+
+  workspaces(id uuid pk, name, slug unique, currency char(3), timezone,
+             created_at)
+  users(id uuid pk, email unique, password_hash, name, created_at)
+  memberships(workspace_id fk, user_id fk, role, created_at,
+              pk(workspace_id, user_id))
+  clients(id, workspace_id fk, name, tax_id, email, address, currency,
+          created_at, unique(workspace_id, tax_id))
+  tax_rates(id, workspace_id, name, rate_bps int check 0..10000, country)
+  services(id, workspace_id, name, description, unit_price_minor bigint
+           check >= 0, currency, tax_rate_id fk, active bool)
+  invoices(id, workspace_id, client_id, number text, status, issue_date,
+           due_date, currency, subtotal_minor, tax_minor, total_minor,
+           amount_paid_minor, notes, issued_at, voided_at, created_by,
+           created_at, unique(workspace_id, number))
+  invoice_lines(id, invoice_id fk, service_id fk nullable, description,
+                quantity numeric(12,3) check > 0, unit_price_minor bigint,
+                tax_rate_bps int, line_subtotal_minor, line_tax_minor,
+                line_total_minor)
+  payments(id, workspace_id, client_id, amount_minor bigint check >= 0,
+           currency, method, external_id, received_at, status,
+           idempotency_key unique, created_at)
+  payment_allocations(id, payment_id fk, invoice_id fk, amount_minor,
+                      unique(payment_id, invoice_id))
+  credit_notes(id, workspace_id, invoice_id, number, amount_minor, reason,
+               status, issued_at)
+  webhook_events(id, provider, external_event_id unique, payload jsonb,
+                 status, attempts, received_at, processed_at)
+  outbox_events(id, aggregate_type, aggregate_id, event_type, payload jsonb,
+                status, attempts, available_at, processed_at, created_at)
+  audit_log(id, workspace_id, actor_id, entity_type, entity_id, action,
+            before jsonb, after jsonb, created_at)
+  idempotency_keys(key pk, workspace_id, request_hash, response jsonb,
+                   created_at, expires_at)
+
+Reglas de dinero:
+  - Guardar enteros en unidades mínimas (centavos) y moneda.
+  - Nunca float. Redondear por línea y sumar; documentar la regla.
+  - Validar que la suma de líneas coincida con subtotal/total.
+  - Calcular impuestos con base imponible y tasa en puntos base (bps).
+  - Un pago no puede asignarse dos veces a la misma factura.
+
+Estados de factura:
+
+  draft --> issued --> partially_paid --> paid
+    |         |              |
+    |         v              v
+    +-----> void          overdue
+
+  - Solo draft es editable.
+  - issued es inmutable; se corrige con credit_note.
+  - void requiere motivo y no puede tener pagos aplicados.
+  - overdue se marca por job o se deriva de due_date + status.
+  - paid cuando amount_paid_minor >= total_minor.
+
+Numeración:
+  - Tabla invoice_counters(workspace_id, year, last_number).
+  - En la misma transacción: SELECT ... FOR UPDATE, incrementar y usar.
+  - Restricción unique(workspace_id, number).
+  - Test de concurrencia: dos emisiones simultáneas no repiten número.
+
+Índices iniciales:
+
+  CREATE INDEX idx_invoices_workspace_status_due
+    ON invoices (workspace_id, status, due_date);
+
+  CREATE INDEX idx_payments_workspace_received
+    ON payments (workspace_id, received_at DESC);
+
+  CREATE INDEX idx_outbox_pending
+    ON outbox_events (status, available_at)
+    WHERE status = 'pending';
+
+  CREATE INDEX idx_webhook_unprocessed
+    ON webhook_events (status, received_at)
+    WHERE status = 'pending';
+
+Restricciones que enseñan modelado:
+  - CHECK en montos y cantidades.
+  - UNIQUE en numeración e idempotencia.
+  - FK con ON DELETE RESTRICT en documentos financieros.
+  - JSONB solo para payloads externos y auditoría, no para datos de negocio.
+4.6 Roadmap por fases
+
+FASE 0 - ENTORNO, GIT Y FUNDAMENTOS
+  Duración: 2-3 semanas | Horas: 10-12
+  Objetivo: tener un entorno reproducible y entender el flujo básico.
+  Entregable: `docker compose up` levanta Postgres, Redis y Mailpit; la API
+  responde /health; `pnpm test` pasa; README con instrucciones.
+  Temas:
+    - WSL2 + Docker Desktop, Node 22 con fnm, pnpm, Git, VS Code.
+    - HTTP, REST, JSON, variables de entorno, logs, 12-factor.
+    - Docker Compose, migraciones (concepto), seed de datos.
+    - Vitest: primer test unitario y primer test de integración.
+  Uso de IA: nivel 0. Solo explicaciones, quizzes y revisión de apuntes.
+  Ejercicio sin IA: escribe el endpoint /health y su test desde cero.
+  Aceptación:
+    [ ] Otra persona clona el repo y lo levanta en menos de 15 minutos.
+    [ ] /health devuelve estado y versión.
+    [ ] El test falla si rompes el endpoint.
+    [ ] No hay secretos en el repositorio; existe .env.example.
+
+FASE 1 - DOMINIO, MODELO DE DATOS Y AUTH
+  Duración: 4-6 semanas | Horas: 20-24
+  Objetivo: modelar el núcleo y asegurar el acceso por workspace.
+  Entregable: CRUD de clientes y servicios, registro/login, roles, migraciones
+  y seeds; OpenAPI publicado.
+  Temas:
+    - ADR 001: monolito modular. ADR 002: capas. ADR 003: ORM.
+    - Tablas: workspaces, users, memberships, clients, services, tax_rates.
+    - Constraints, índices, claves foráneas y borrado restrictivo.
+    - Hash de contraseñas con argon2; sesión o JWT; RBAC.
+    - Validación con Zod; errores consistentes; paginación.
+    - Tests de integración con PostgreSQL real (Testcontainers).
+  Uso de IA: nivel 1. Puede generar configuración, scaffolding y tests
+  adicionales a partir de tus invariantes. No diseña el modelo.
+  Ejercicio sin IA: escribe la migración de clients y el caso de uso
+  createClient, con tests, sin generación.
+  Aceptación:
+    [ ] Un usuario de un workspace no puede leer datos de otro.
+    [ ] Las contraseñas se guardan hasheadas y nunca se devuelven.
+    [ ] Los roles limitan acciones (viewer no escribe).
+    [ ] Cada tabla tiene claves, constraints e índices justificados.
+    [ ] OpenAPI refleja los endpoints reales.
+
+FASE 2 - FACTURAS Y MÁQUINA DE ESTADOS
+  Duración: 5-7 semanas | Horas: 25-30
+  Objetivo: emitir facturas correctas e inmutables.
+  Entregable: crear borrador, emitir, anular, listar y consultar facturas;
+  numeración atómica; totales exactos.
+  Temas:
+    - invoices, invoice_lines, invoice_counters.
+    - Cálculo de subtotal, impuestos y total en unidades mínimas.
+    - Máquina de estados y transiciones válidas.
+    - Inmutabilidad tras la emisión; notas de crédito para corregir.
+    - Tests unitarios de dominio y property-based testing para totales.
+    - Test de concurrencia para la numeración.
+  Uso de IA: nivel 1-2. Revisa transiciones y sugiere casos borde. Tú
+  escribes la lógica y el test de concurrencia.
+  Ejercicio sin IA: implementa la numeración atómica y demuéstrala con un
+  test que lanza dos emisiones en paralelo.
+  Aceptación:
+    [ ] No se puede editar una factura emitida.
+    [ ] Dos emisiones concurrentes no repiten número.
+    [ ] Los totales son exactos en 100 casos generados.
+    [ ] Una transición inválida devuelve 409 y no cambia el estado.
+    [ ] Anular una factura con pagos exige nota de crédito.
+
+FASE 3 - PAGOS, WEBHOOKS, OUTBOX Y CONCILIACIÓN
+  Duración: 5-7 semanas | Horas: 25-30
+  Objetivo: cobrar sin duplicar y sin perder eventos.
+  Entregable: link de pago con Stripe test; webhook firmado e idempotente;
+  worker de outbox; pagos parciales asignados a facturas.
+  Temas:
+    - payments, payment_allocations, credit_notes.
+    - Puerto PaymentGateway con StripeAdapter y FakeGateway.
+    - Verificación de firma; external_event_id único; reintentos.
+    - Outbox pattern: escribir negocio y evento en la misma transacción.
+    - BullMQ: worker, reintentos, backoff, dead letter.
+    - Conciliación: sobrepago, pago huérfano, reembolso.
+  Uso de IA: nivel 2. Puede proponer el diseño del outbox y revisar el
+  worker. Tú decides y escribes el handler y el test de idempotencia.
+  Ejercicio sin IA: escribe el test que envía dos veces el mismo webhook y
+  verifica que solo hay un pago.
+  Aceptación:
+    [ ] Un webhook duplicado no duplica el pago.
+    [ ] Si el worker falla, el evento se reintenta y no se pierde.
+    [ ] Un pago puede cubrir varias facturas y una factura varios pagos.
+    [ ] El saldo de la factura siempre es consistente.
+    [ ] La firma inválida se rechaza con 400.
+
+FASE 4 - FRONTEND NEXT.JS
+  Duración: 6-8 semanas | Horas: 30-35
+  Objetivo: demostrar el flujo completo sin instrucciones.
+  Entregable: login, dashboard, lista de facturas, editor, detalle de cliente
+  y registro de pago; 2-3 flujos e2e con Playwright.
+  Temas:
+    - App Router, server components, layouts, rutas protegidas.
+    - Formularios, validación compartida con Zod, manejo de errores.
+    - Tablas, filtros, paginación y estados de carga.
+    - Accesibilidad básica y responsive.
+    - Playwright: login, crear factura, registrar pago.
+  Uso de IA: nivel 2. Genera componentes repetitivos y tests e2e; tú defines
+  flujos, validaciones y criterios.
+  Ejercicio sin IA: implementa el formulario de factura y su validación.
+  Aceptación:
+    [ ] Un usuario nuevo completa el flujo sin ayuda.
+    [ ] Los errores de la API se muestran de forma comprensible.
+    [ ] No hay datos de otro workspace en pantalla.
+    [ ] Los flujos críticos pasan en Playwright.
+    [ ] La UI funciona en pantalla pequeña.
+
+FASE 5 - REPORTES, JOBS Y AUDITORÍA
+  Duración: 3-4 semanas | Horas: 15-18
+  Objetivo: responder preguntas de negocio y automatizar el mantenimiento.
+  Entregable: aging, ingresos por mes, impuestos, job de vencidas,
+  recordatorios y audit_log.
+  Temas:
+    - Agregaciones SQL, joins, CTEs, índices y EXPLAIN ANALYZE.
+    - Vistas materializadas y refresco.
+    - Jobs idempotentes: marcar vencidas, enviar recordatorios.
+    - Auditoría inmutable: triggers o capa de aplicación.
+    - Paginación y exportación CSV (opcional).
+  Uso de IA: nivel 3. Revisa consultas y sugiere índices; tú mides y decides.
+  Ejercicio sin IA: escribe la consulta de aging y su test con fixtures.
+  Aceptación:
+    [ ] Reportes correctos contra fixtures conocidos.
+    [ ] Consultas bajo 100 ms con 100k filas de prueba.
+    [ ] Jobs idempotentes: correrlos dos veces no duplica efectos.
+    [ ] audit_log registra actor, acción, antes y después.
+
+FASE 6 - ENDURECIMIENTO Y PORTAFOLIO
+  Duración: 3-4 semanas | Horas: 15-20
+  Objetivo: convertir el proyecto en una pieza presentable.
+  Entregable: CI verde, seguridad básica, observabilidad, README, ADRs,
+  AI_USAGE.md, video de 3 minutos y guía de despliegue.
+  Temas:
+    - GitHub Actions: lint, typecheck, tests, build, cache.
+    - Rate limiting, headers, CORS, secretos, npm audit.
+    - Logs estructurados, request id, health checks, métricas básicas.
+    - README: pitch, arquitectura, modelo de datos, cómo correr, decisiones.
+    - Guion de demo y preguntas de entrevista.
+  Uso de IA: nivel 3. Revisión final, checklist de seguridad y borradores de
+  documentación.
+  Ejercicio sin IA: levanta el proyecto desde cero siguiendo tu propia guía.
+  Aceptación:
+    [ ] CI verde en main.
+    [ ] README permite entender y correr el proyecto en 10 minutos.
+    [ ] Existe un ADR por decisión importante.
+    [ ] Video de 3 minutos muestra el flujo y una decisión técnica.
+    [ ] No hay secretos ni datos reales en el repo.
+
+Resumen de horas del Proyecto 1:
+  MVP (fases 0-4): 110-131 h.
+  Portafolio (fases 5-6): 30-38 h.
+  Total: 140-169 h.
+  A 5 h/semana: 28-34 semanas, aproximadamente 7-8 meses.
+
+Modo mínimo si el tiempo aprieta:
+  - Mantén fases 0-3 completas.
+  - En fase 4, solo login, lista y editor de factura.
+  - En fase 5, solo aging y job de vencidas.
+  - No recortes tests, migraciones ni auditoría.
+
+4.7 Criterios de aceptación y Definition of Done
+
+Criterios de producto (MVP):
+  [ ] Crear workspace, invitar miembro y asignar rol.
+  [ ] Crear cliente y servicio con impuesto.
+  [ ] Crear factura, emitirla y verla con número único.
+  [ ] Registrar pago parcial y ver saldo actualizado.
+  [ ] Pagar con Stripe test y recibir webhook.
+  [ ] Reenviar el mismo webhook y verificar que no se duplica.
+  [ ] Anular una factura sin pagos y corregir una con pagos.
+  [ ] Ver aging e ingresos del mes.
+  [ ] Un usuario de otro workspace no accede a los datos.
+
+Definition of Done por fase:
+  [ ] Código con tipos y lint sin errores.
+  [ ] Tests unitarios e integración pasando en CI.
+  [ ] Migración reversible o con plan de rollback documentado.
+  [ ] ADR de las decisiones no triviales.
+  [ ] README actualizado.
+  [ ] AI_LOG.md actualizado con la tarea asistida.
+  [ ] Demo de 30-60 segundos o capturas.
+  [ ] Backlog actualizado; nada de TODOs sueltos en main.
+  [ ] Puedes explicar el módulo en 5 minutos sin mirar el código.
+
+Guion de demo (3 minutos):
+  1. 0:00-0:30 problema y usuario.
+  2. 0:30-1:30 crear factura y emitirla.
+  3. 1:30-2:15 pagar con Stripe test y mostrar webhook.
+  4. 2:15-2:45 reenviar webhook y demostrar idempotencia.
+  5. 2:45-3:00 decisión técnica y qué harías después

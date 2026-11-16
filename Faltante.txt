@@ -1,0 +1,88 @@
+===============================================================================
+FALTANTE — PROYECTO 1: FACTURACIÓN Y CONCILIACIÓN
+Revisión limitada a: FASE 0 — ENTORNO, GIT Y FUNDAMENTOS
+Fecha: 2026-11-16
+Carpeta: E:\facturacion\
+===============================================================================
+
+RESUMEN EJECUTIVO
+-------------------------------------------------------------------------------
+Contenido encontrado: únicamente `proyecto.txt` (plan del proyecto).
+Código, entorno, tests y documentación operativa: NO EXISTEN.
+Progreso de la Fase 0: 0% (0/100 puntos).
+Progreso global del proyecto: no evaluado (solo se solicitó la Fase 0).
+
+ACTIVIDADES COMPLETADAS
+-------------------------------------------------------------------------------
+[✓] Definición del proyecto y roadmap por fases ....... 100% (insumo, no entregable)
+    Evidencia: proyecto.txt con alcance, stack, arquitectura y Fase 0.
+[✓] Barrido y verificación de la carpeta ................ 100% (revisión del supervisor)
+
+No hay ninguna actividad entregable de la Fase 0 completada.
+
+ACTIVIDADES PENDIENTES Y PORCENTAJE
+-------------------------------------------------------------------------------
+[✗] M1. Repositorio Git inicializado ................... 0%  (peso 10%)
+     Falta: `git init`, rama `main`, `.gitignore` (node_modules, .env, dist,
+     coverage), `.editorconfig` y commit inicial.
+[✗] M2. Toolchain reproducible ......................... 0%  (peso 10%)
+     Falta: Node 22 con fnm, `.nvmrc`, pnpm con `packageManager`, `engines`,
+     scripts y configuración de VS Code.
+[✗] M3. Docker Compose con Postgres 16, Redis 7 y Mailpit 0%  (peso 20%)
+     Falta: `docker-compose.yml` con healthchecks, volúmenes persistentes,
+     red interna, puertos y credenciales por entorno.
+[✗] M4. API mínima con GET /health ..................... 0%  (peso 20%)
+     Falta: TypeScript + Fastify, endpoint que devuelva estado y versión,
+     logs básicos, manejo de errores sin stack traces.
+[✗] M5. Tests con Vitest ............................... 0%  (peso 20%)
+     Falta: primer test unitario, primer test de integración y test que falle
+     si se rompe /health. `pnpm test` debe pasar desde cero.
+[✗] M6. README e instrucciones ......................... 0%  (peso 10%)
+     Falta: requisitos, instalación, variables, `docker compose up`, seed,
+     tests, troubleshooting y tiempo de arranque < 15 min.
+[✗] M7. Higiene y 12-factor ............................ 0%  (peso 5%)
+     Falta: `.env.example`, configuración validada, logs estructurados y
+     verificación de que no haya secretos versionados.
+[✗] M8. Fundamentos documentados ....................... 0%  (peso 5%)
+     Falta: concepto de migración + seed, notas/quizzes del ejercicio sin IA
+     y `AI_LOG.md`.
+
+CHECKLIST DE ACEPTACIÓN
+-------------------------------------------------------------------------------
+[ ] Otra persona clona el repo y lo levanta en menos de 15 minutos.
+[ ] /health devuelve estado y versión.
+[ ] El test falla si rompes el endpoint.
+[ ] No hay secretos en el repositorio; existe .env.example.
+[ ] `docker compose up` levanta Postgres, Redis y Mailpit.
+[ ] `pnpm test` pasa.
+[ ] README con instrucciones completas.
+[ ] Ejercicio sin IA: endpoint /health y test escritos desde cero.
+
+CONSEJOS PARA COMPLETAR LA FASE 0
+-------------------------------------------------------------------------------
+1. Empieza por el repositorio y el toolchain: sin versiones fijadas, el
+   criterio de "15 minutos" no se puede cumplir de forma reproducible.
+2. Escribe primero el `docker-compose.yml` y valida con `docker compose up -d`
+   y `docker compose ps` que los tres servicios estén healthy. Sin healthchecks
+   el arranque será una carrera contra la base de datos.
+3. Implementa /health de forma trivial y añade versión desde `package.json`.
+   No conectes lógica de negocio al endpoint.
+4. Cubre /health con dos pruebas: unitaria (contrato de respuesta) e
+   integración (servidor real en un puerto efímero). Añade una prueba negativa
+   que demuestre que el test detecta una rotura.
+5. Documenta el flujo exacto en el README y pruébalo en una carpeta limpia
+   (clonar + copiar `.env.example` + `docker compose up` + `pnpm install` +
+   `pnpm test`). Si tardas más de 15 minutos, recorta pasos manuales.
+6. Añade `.env.example` antes del primer commit y verifica el `.gitignore` con
+   `git status` para no filtrar secretos.
+7. No avances a la Fase 1 hasta que las 4 casillas de aceptación de la Fase 0
+   tengan evidencia verificable.
+
+RIESGOS DETECTADOS
+-------------------------------------------------------------------------------
+- No existe repositorio: no hay trazabilidad ni posibilidad de CI.
+- No existe entorno reproducible: el riesgo de "funciona en mi máquina" es alto.
+- No existen tests: cualquier implementación futura será frágil.
+- El documento del proyecto está aislado; conviene convertirlo en issues o
+  backlog accionable antes de empezar a programar.
+===============================================================================

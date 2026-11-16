@@ -1,0 +1,13 @@
+#Ignorar documentos innecesarios
+./hints.md
+./progress.md
+./proyecto.txt
+./faltante.txt
+node_modules/
+dist/
+coverage/
+.env
+*.log
+.editorconfig
+.nvmrc
+22
